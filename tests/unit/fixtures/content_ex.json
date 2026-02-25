@@ -1,0 +1,29 @@
+{
+  "valid": [
+    {
+      "file_id": "fl_849218",
+      "user_id": "usr_1029",
+      "file_name": "voice_1.ogg"
+    },
+    {
+      "file_id": "fl_910302",
+      "user_id": "usr_4432",
+      "file_name": "voice_2.mp3"
+    }
+  ],
+  "invalid": [
+    {
+      "file_id": "fl_invalid_1",
+      "user_id": "usr_1211",
+      "file_name": "missing.ogg",
+      "reason": "file does not exist"
+    },
+    {
+      "file_id": "fl_invalid_2",
+      "user_id": "usr_1212",
+      "file_name": "not_a_file",
+      "is_dir": true,
+      "reason": "path is a directory"
+    }
+  ]
+}

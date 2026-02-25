@@ -1,0 +1,6 @@
+aiogram
+python-dotenv
+openai-whisper
+pydantic
+torch
+pytest
