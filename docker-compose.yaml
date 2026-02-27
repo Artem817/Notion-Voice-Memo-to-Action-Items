@@ -1,9 +1,27 @@
 services:
+  db:
+    image: postgres:15-alpine
+    container_name: notion_postgres
+    restart: always
+    env_file: .env  
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   bot:
     build: .
+    container_name: notionvoicememo-bot-1
     env_file: .env
     environment:
       WHISPER_PRELOAD: "1"
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     volumes:
       - ./whisper_models:/app/whisper_models
       - ./data:/app/data
+    depends_on:
+      - db
+
+  
+volumes:
+  postgres_data:

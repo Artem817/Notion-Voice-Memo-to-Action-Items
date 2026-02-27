@@ -4,7 +4,7 @@ from app.db import models
 from app.services.notion_vault import NotionVault
 
 
-class NotionKeyPipline:
+class NotionKeyPipeline:
     def __init__(self, raw_string: str, master_key: str):
         self._raw = raw_string
         try:
@@ -23,8 +23,10 @@ class NotionKeyPipline:
         return self
 
     def step_2_validation(self):
-        if not self.clean_data.startswith("secret_"):
-            raise ValueError("Notion API key must start with 'secret_'")
+        valid_prefixes = ("secret_", "ntn_")
+        
+        if not self.clean_data.startswith(valid_prefixes):
+            raise ValueError("Notion API key must start with 'secret_' or 'ntn_'")
         if len(self.clean_data) < 20:
             raise ValueError("Notion API key is too short to be valid")
         return self

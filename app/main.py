@@ -5,53 +5,82 @@ from pathlib import Path
 import re
 import sys
 from os import getenv
-from aiogram.fsm.context import FSMContext
-from dotenv import load_dotenv
+from aiogram.filters import Command
 from aiogram import Bot, Dispatcher, F, html
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
-from aiogram.types import Message, Voice, CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message, Voice
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from dotenv import load_dotenv
 import whisper
+
 from app.db.base import get_db
 from app.db.models import NotionCredential, NotionSetup
-from app.services.credential_manager import NotionKeyPipline
-from app.services.notion_serviceю import NotionPublisher
+from app.services.credential_manager import NotionKeyPipeline
+from app.services.llm_service import GeminiLLMService, ProcessedMemo
+from app.services.notion_publisher import (
+    NotionCredentialsMissing,
+    NotionPublishError,
+    NotionPublisher,
+)
 from app.speech_recogniser.speach_engine import WhisperResult, transcribe_audio
 from app.voice_processing import VoiceProcessingRequest
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from db.models import NotionCredential
-from services.notion_vault import NotionVault
+from aiogram.types import FSInputFile
 
 load_dotenv()
 
 _WHISPER_MODEL = None
 
-# FIXME replace with radishes. Dictionary for tracking statuses (to avoid adding twice) 
 pending_confirmations = {}
 
+_llm_service: GeminiLLMService | None = None
 
 
+def _get_llm_service() -> GeminiLLMService:
+    global _llm_service
+    if _llm_service is None:
+        _llm_service = GeminiLLMService()
+    return _llm_service
 
-async def save_to_notion_logic(transcription: str, user_id: int):
-    session_local = get_db()
-    with session_local as session:
-        cred = session.query(NotionCredential).filter_by(user_id=user_id).first()
-        if not cred:
-            print(f"Error: Key for user {user_id} not found.")
-            return
 
-    vault = NotionVault()
-    decrypted_key = vault.decrypt_key(cred.encrypted_key)
+def _get_publisher() -> NotionPublisher:
+    master_key = getenv("MASTER_KEY")
+    if not master_key:
+        raise RuntimeError("MASTER_KEY is not set")
+    return NotionPublisher(get_db, master_key)
 
-    title = f"Голосова нотатка: {transcription[:30]}..."
 
-    publisher = NotionPublisher(decrypted_key, cred.database_id)
+async def save_to_notion(
+    structured_data: ProcessedMemo,
+    transcript: str,
+    user_id: int,
+) -> tuple[bool, str]:
     try:
-        await publisher.create_memo_page(title=title, summary=transcription)
-    except Exception as e:
-        print(f"Error writing to Notion: {e}")
-        
+        publisher = _get_publisher()
+    except RuntimeError:
+        logging.error("MASTER_KEY is not set")
+        return False, "Server not configured. Please try again later."
+    try:
+        await publisher.publish_from_user_id(
+            user_id=user_id,
+            title=structured_data.llm_data.title,
+            tasks=structured_data.llm_data.tasks,
+            transcript=transcript,
+            date_value=structured_data.llm_data.task_date_from_user,
+        )
+    except NotionCredentialsMissing:
+        return False, "Notion is not connected. Send /start and connect the database."
+    except NotionPublishError as exc:
+        logging.exception("Notion publish error: %s", exc)
+        return False, "Failed to save note to Notion."
+    except Exception as exc:  # pragma: no cover - unexpected error
+        logging.exception("Unexpected Notion error: %s", exc)
+        return False, "Failed to save note to Notion."
+
+    return True, ""
+
 def _resolve_models_dir() -> Path:
     env_dir = getenv("WHISPER_CACHE_DIR") or getenv("WHISPER_MODELS_DIR")
     if env_dir:
@@ -98,18 +127,19 @@ def _extract_notion_database_id(text: str) -> str | None:
     return raw_id.replace("-", "").lower()
 
 async def progress_bar_animation(message: Message, stop_event: asyncio.Event):
-    """Animation of a 'thinking' bot"""
-    frames = ["[░░░░░░░░░░]", "[▓░░░░░░░░░]", "[▓▓░░░░░░░░]", "[▓▓▓░░░░░░░]", 
-              "[▓▓▓▓░░░░░░]", "[▓▓▓▓▓░░░░░]", "[▓▓▓▓▓▓░░░░]", "[▓▓▓▓▓▓▓░░░]"]
+    frames = ["[░░░░░░░░░░]", "[▓░░░░░░░░░]", "[▓▓░░░░░░░░]", "[▓▓▓░░░░░░░]"]
     i = 0
     status_msg = await message.answer("Starting processing...")
     
     try:
         while not stop_event.is_set():
-            await status_msg.edit_text(f"The processing is working...\n{frames[i % len(frames)]}")
-            await asyncio.sleep(0.5)
+            try:
+                await status_msg.edit_text(f"Processing...\n{frames[i % len(frames)]}")
+            except Exception as e:
+                pass 
+            await asyncio.sleep(1.5) 
             i += 1
-    except Exception:
+    except asyncio.CancelledError:
         pass
     
     return status_msg
@@ -127,6 +157,21 @@ def _should_preload_model() -> bool:
     value = (getenv("WHISPER_PRELOAD") or "1").strip().lower()
     return value not in {"0", "false", "no", "off"}
 
+
+@dp.message(F.from_user.id != int(getenv("ADMIN_ID") or 0))
+async def access_denied_handler(message: Message):
+    """
+    Blocks all messages from users whose ID does not match ADMIN_ID
+    """
+    await message.answer("Access Restricted\nThis bot is in private test mode. Please contact the administrator.")
+    logging.warning(f"Unauthorized access attempt by {message.from_user.full_name} (ID: {message.from_user.id})")
+    return 
+
+@dp.callback_query(F.from_user.id != int(getenv("ADMIN_ID") or 0))
+async def access_denied_callback(callback: CallbackQuery):
+    await callback.answer("Access denied.", show_alert=True)
+    
+
 @dp.message(NotionSetup.waiting_for_key)
 async def process_notion_key(message: Message, state: FSMContext):
     raw_key = message.text
@@ -135,27 +180,29 @@ async def process_notion_key(message: Message, state: FSMContext):
         await message.delete()
     except Exception as e:
         print(f"Failed to delete message: {e}")
-        await message.answer("We were unable to delete your message. Please delete it manually.")
+        await message.answer("Failed to delete your message. Please delete it manually.")
 
     if not raw_key:
-        await message.answer("Надішліть Notion API key текстом.")
+        await message.answer("Send Notion API key as text.")
         return
 
     master_key = getenv("MASTER_KEY")
     if not master_key:
         logging.error("MASTER_KEY is not set")
-        await message.answer("The server is not configured. Please try again later.")
+        await message.answer("Server not configured. Try again later.")
         return
 
     try:
-        pipeline = NotionKeyPipline(raw_key, master_key)
+        pipeline = NotionKeyPipeline(raw_key, master_key)
         pipeline.step_1_sanitize().step_2_validation().step_3_encrypt()
     except RuntimeError as e:
         logging.exception("MASTER_KEY configuration error: %s", e)
-        await message.answer("The server is not configured. Please try again later.")
+        await message.answer("Server not configured. Try again later.")
         return
     except ValueError as e:
-        await message.answer(str(e))
+        await message.answer(f"{e}\nPlease try again.")
+        # We generally want to keep the user in the waiting_for_key state so they can retry immediately,
+        # so we do NOT clear the state here.
         return
 
     with get_db() as session:
@@ -167,7 +214,7 @@ async def process_notion_key(message: Message, state: FSMContext):
 
     await state.set_state(NotionSetup.waiting_for_database)
     await message.answer(
-       "Great! Now send me the link to the Notion database or its ID."
+        "Great! Now send the link to the Notion database or its ID."
     )
 
 
@@ -179,7 +226,7 @@ async def process_notion_database(message: Message, state: FSMContext):
     database_id = _extract_notion_database_id(raw_text)
     if not database_id:
         await message.answer(
-           "Could not find ID. Please send a link to the Notion database or the ID itself."
+            "Failed to find ID. Send the link to the Notion database or the ID itself."
         )
         return
 
@@ -189,7 +236,7 @@ async def process_notion_database(message: Message, state: FSMContext):
             existing.database_id = database_id
             existing.workspace_name = existing.workspace_name or "Default Workspace"
         else:
-            await message.answer("The key has not been saved yet. Send /start and try again.")
+            await message.answer("Key not saved yet. Send /start and try again.")
             await state.clear()
             return
         session.commit()
@@ -210,27 +257,25 @@ async def command_start_handler(message: Message, state: FSMContext) -> None:
 
         if user_cred and user_cred.database_id:
             await message.answer(
-                f"Hello! Your Notion is connected (Key ID: {user_cred.id}). You can send voice messages!"
+                f"Hello! Your Notion is connected (Key ID: {user_cred.id}). You can send voice messages."
             )
             return
 
         if user_cred and not user_cred.database_id:
             await message.answer(
-                "Great! Now send me the link to the Notion database or its ID."
+                "Great! Now send the link to the Notion database or its ID."
             )
             await state.set_state(NotionSetup.waiting_for_database)
             return
 
         await message.answer(
-            "Please send your Notion API Key (secret_...)."
+            "Welcome to NotionVoiceMemo! Let's connect your Notion first. For instructions, send /help")
+        
+        await message.answer(
+            "Send your Notion API Key (secret_ or ntn_...)."
         )
         await state.set_state(NotionSetup.waiting_for_key)
 
-async def save_to_notion_placeholder(transcription: str, user_id: int):
-    """This is a placeholder function where you would implement the logic to save the transcription to Notion."""
-    await asyncio.sleep(1)  # Simulate some processing time
-    logging.info(f"Saving to Notion for user {user_id}: {transcription[:30]}...")
-    
 @dp.message(F.content_type == "voice")
 async def voice_handler(message: Message) -> None:
     """
@@ -257,29 +302,41 @@ async def voice_handler(message: Message) -> None:
         voice_transcription: WhisperResult = await asyncio.to_thread(
             transcribe_audio, request_obj
         )
+
+        try:
+            llm_service = _get_llm_service()
+            structured_data = await llm_service.structure_transcript(
+                voice_transcription.text
+            )
+        except Exception as e:
+            logging.exception("LLM processing failed: %s", e)
+            await message.answer("Failed to process transcription via LLM.")
+            return
+
+        tasks_preview = "\n".join(
+            f"• {task}" for task in structured_data.llm_data.tasks
+        )
         
         kb = InlineKeyboardBuilder()
-        kb.button(text="✅ Accept", callback_data=f"accept_note_{str(message.from_user.id)}")
-        kb.button(text="❌ Reject", callback_data=f"reject_note_{str(message.from_user.id)}")
+        kb.button(text="✅ Add", callback_data=f"accept_note_{message.from_user.id}")
+        kb.button(text="❌ Cancel", callback_data=f"reject_note_{message.from_user.id}")
         confirm_msg = await message.answer(
-        f"The note is ready:\n\n\"{voice_transcription.text}\"\n\nAdd to Notion? (Auto-save in 10 seconds)",
-        reply_markup=kb.as_markup()
-    )
+            "Note ready:\n\n"
+            f"{structured_data.llm_data.title}\n"
+            f"{tasks_preview}\n\n"
+            "Add to Notion? (Autosave in 10 seconds)",
+            reply_markup=kb.as_markup(),
+        )
         
-        note_id = confirm_msg.message_id
-        pending_confirmations[note_id] = {
-        "text": voice_transcription.text ,
-        "user_id": str(message.from_user.id),
-        "processed": False
-        }
-        asyncio.create_task(handle_auto_save(note_id, confirm_msg))
-        await message.answer(f"Transcription:\n{voice_transcription.text}")
-        await message.answer("Nice voice!")
-        
-        
+        await register_auto_save(
+            confirm_msg,
+            voice_transcription.text,
+            structured_data,
+            message.from_user.id
+        )
     except Exception as e:
         logging.error(f"Error processing voice message: {e}")
-        await message.answer("Sorry, something went wrong while processing your voice message.")
+        await message.answer("An error occurred while processing the voice message.")
     finally:
         stop_whisper_event.set()
         with suppress(Exception):
@@ -290,22 +347,63 @@ async def voice_handler(message: Message) -> None:
         with suppress(FileNotFoundError):
             local_filename.unlink()
  
- #FIXME: This function should be improved to handle multiple notes
-async def handle_auto_save(note_id: int, message_obj: Message):
+@dp.message(Command("help"))
+async def handle_help(message: Message):
+    pdf_path = "guide.pdf" 
+    
+    try:
+        pdf_file = FSInputFile(pdf_path)
+        await message.answer(f"DEBUG: User {message.from_user.full_name} has ID: {message.from_user.id}")
+        await message.answer_document(
+            document=pdf_file,
+            caption="NotionVoiceMemo Setup Guide (PDF)\n\nFollow these steps to connect your database."
+        )
+    except Exception as e:
+        logging.error(f"Failed to send PDF: {e}")
+        await message.answer("Sorry, I couldn't find the guide file.")
+        
+async def register_auto_save(
+    message_obj: Message,
+    transcript: str,
+    structured_data: ProcessedMemo,
+    user_id: int,
+):
+    """Registers a note for auto-save and starts the timer."""
+    note_id = message_obj.message_id
+    pending_confirmations[note_id] = {
+        "text": transcript,
+        "structured": structured_data,
+        "user_id": user_id,
+        "processed": False,
+    }
+    
+    # Start the background task
+    asyncio.create_task(_auto_save_task(note_id, message_obj))
+
+
+async def _auto_save_task(note_id: int, message_obj: Message):
     """A background task that waits 10 seconds and saves if there is no response"""
     await asyncio.sleep(10)
     
     data = pending_confirmations.get(note_id)
     if data and not data["processed"]:
         data["processed"] = True
-       # Calling  function
-        await save_to_notion_placeholder(data["text"], data["user_id"])
-        
-       # We update the message so that the user can see that it has been saved automatically.
-        await message_obj.edit_text(
-            f"✅ Automatically saved in Notion:\n\n\"{data['text']}\"",
-            reply_markup=None
+        success, error_message = await save_to_notion(
+            structured_data=data["structured"],
+            transcript=data["text"],
+            user_id=data["user_id"],
         )
+
+        if success:
+            await message_obj.edit_text(
+                "✅ Automatically saved to Notion.",
+                reply_markup=None,
+            )
+        else:
+            await message_obj.edit_text(
+                f"❌ Failed to save to Notion. {error_message}",
+                reply_markup=None,
+            )
         # Deleting from memory
         pending_confirmations.pop(note_id, None)
 
@@ -316,9 +414,17 @@ async def accept_handler(callback: CallbackQuery):
     
     if data and not data["processed"]:
         data["processed"] = True
-        await save_to_notion_placeholder(data["text"], data["user_id"])
-        await callback.message.edit_text(f"✅ Saved by user:\n\n\"{data['text']}\"")
-        await callback.answer("Saved!")
+        success, error_message = await save_to_notion(
+            structured_data=data["structured"],
+            transcript=data["text"],
+            user_id=data["user_id"],
+        )
+        if success:
+            await callback.message.edit_text("✅ Saved to Notion.")
+            await callback.answer("Saved!")
+        else:
+            await callback.message.edit_text(f"❌ Failed to save. {error_message}")
+            await callback.answer("Error")
     
     pending_confirmations.pop(note_id, None)
     
@@ -329,8 +435,8 @@ async def reject_handler(callback: CallbackQuery):
     if note_id in pending_confirmations:
         pending_confirmations[note_id]["processed"] = True
         
-        await callback.message.edit_text("❌ The note has been cancelled.")
-        
+        await callback.message.edit_text("❌ Note cancelled.")
+
         await callback.answer("Deleted")
         
         # Clearing the memory

@@ -18,8 +18,7 @@ class NotionCredential(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, nullable=False, index=True)
     workspace_name = Column(String(255))
-    database_id = Column(String(64), index=True)
-    database_id = Column(String(100), nullable=True)
+    database_id = Column(String(64), nullable=True, index=True)
     encrypted_key = Column(LargeBinary, nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -30,3 +29,4 @@ class NotionCredential(Base):
 
 class NotionSetup(StatesGroup):
     waiting_for_key = State()
+    waiting_for_database = State()
