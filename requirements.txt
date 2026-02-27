@@ -4,3 +4,9 @@ openai-whisper
 pydantic
 torch
 pytest
+google-genai
+sqlalchemy
+alembic
+psycopg2-binary
+cryptography
+httpx
