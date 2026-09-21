@@ -14,6 +14,7 @@ ENV PYTHONUNBUFFERED=1
 ENV WHISPER_CACHE_DIR=/app/whisper_models
 ENV PYTHONPATH=/app 
 
+COPY requirements.txt .
 # Increase pip timeout and retries to ensure large dependencies like PyTorch
 # download reliably even on slower networks without failing.
 RUN pip install --default-timeout=1000 --retries 10 -r requirements.txt
