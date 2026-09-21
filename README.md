@@ -80,6 +80,11 @@ Voice Message → Whisper (local STT) → Gemini LLM (structuring) → Notion AP
    docker compose up --build
    ```
 
+### ⚡ For NVIDIA GPU (CUDA) Users
+By default, the `Dockerfile` installs the **CPU-only** version of PyTorch to keep the image lightweight (~1.5GB) and the build time fast (2-3 mins). This is perfect for Mac (Apple Silicon) and standard Windows/Linux PCs.
+
+If you have an NVIDIA GPU on a Linux host and want to use CUDA for faster transcription, simply replace the `RUN arch=...` block in the `Dockerfile` with `RUN pip install torch torchvision torchaudio` before running the build. This full build takes ~30 minutes as it downloads ~3GB of NVIDIA libraries.
+
    > [!TIP]
    > **First Startup & Model Download Time:**
    > On the first startup, Whisper automatically downloads the weights for your configured `WHISPER_MODEL`:
