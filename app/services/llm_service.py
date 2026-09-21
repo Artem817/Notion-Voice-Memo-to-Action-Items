@@ -1,20 +1,16 @@
 import os
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 
-class AdditionalInfo(BaseModel):
-    priority: Optional[str] = Field(default="Medium", description="Low, Medium, or High")
-    category: Optional[str] = Field(default="General", description="Grammar, Vocabulary, Speaking, or General")
-
 class GemJsonResponseSchema(BaseModel):
     title: str = Field(description="Short text-based note title")
     task_date_from_user: str = Field(description="YYYY-MM-DD format")
-    tasks: List[str] = Field(min_items=1, description="List of tasks")
+    tasks: list[str] = Field(min_length=1, description="List of tasks")
     priority: str = Field(default="Normal", description="High, Medium, Normal, or Low")
     should_ignore: bool = Field(default=False, description="True if user wants to cancel or ignore")
 

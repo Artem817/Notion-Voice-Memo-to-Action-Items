@@ -8,10 +8,16 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   bot:
     build: .
     container_name: notionvoicememo-bot-1
+    restart: unless-stopped
     env_file: .env
     environment:
       WHISPER_PRELOAD: "1"
@@ -20,8 +26,8 @@ services:
       - ./whisper_models:/app/whisper_models
       - ./data:/app/data
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
-  
 volumes:
   postgres_data:

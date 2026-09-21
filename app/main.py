@@ -1,22 +1,23 @@
 import asyncio
 import logging
-from contextlib import suppress
-from pathlib import Path
 import re
 import sys
+import tempfile
+from contextlib import suppress
 from os import getenv
-from aiogram.filters import Command
+from pathlib import Path
+
 from aiogram import Bot, Dispatcher, F, html
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, Voice
+from aiogram.types import CallbackQuery, FSInputFile, Message, Voice
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 import whisper
 
-from app.db.base import get_db
+from app.db.base import get_db, engine, Base
 from app.db.models import NotionCredential, NotionSetup
 from app.services.credential_manager import NotionKeyPipeline
 from app.services.llm_service import GeminiLLMService, ProcessedMemo
@@ -25,9 +26,9 @@ from app.services.notion_publisher import (
     NotionPublishError,
     NotionPublisher,
 )
-from app.speech_recogniser.speach_engine import WhisperResult, transcribe_audio
+from app.speech_recogniser.speech_engine import WhisperResult, transcribe_audio
+from app.utils import extract_notion_database_id
 from app.voice_processing import VoiceProcessingRequest
-from aiogram.types import FSInputFile
 
 load_dotenv()
 
@@ -69,6 +70,7 @@ async def save_to_notion(
             tasks=structured_data.llm_data.tasks,
             transcript=transcript,
             date_value=structured_data.llm_data.task_date_from_user,
+            priority=structured_data.llm_data.priority,
         )
     except NotionCredentialsMissing:
         return False, "Notion is not connected. Send /start and connect the database."
@@ -114,17 +116,7 @@ def _get_whisper_model():
     return _WHISPER_MODEL
 
 
-def _extract_notion_database_id(text: str) -> str | None:
-    if not text:
-        return None
-    match = re.search(
-        r"([0-9a-fA-F]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})",
-        text,
-    )
-    if not match:
-        return None
-    raw_id = match.group(1)
-    return raw_id.replace("-", "").lower()
+whisper_semaphore = asyncio.Semaphore(1)
 
 async def progress_bar_animation(message: Message, stop_event: asyncio.Event):
     frames = ["[░░░░░░░░░░]", "[▓░░░░░░░░░]", "[▓▓░░░░░░░░]", "[▓▓▓░░░░░░░]"]
@@ -158,13 +150,15 @@ def _should_preload_model() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+# If ADMIN_ID is unset, getenv returns None -> int(0) -> 0. 
+# User ID 0 doesn't exist, so this safely blocks everyone.
 @dp.message(F.from_user.id != int(getenv("ADMIN_ID") or 0))
 async def access_denied_handler(message: Message):
     """
     Blocks all messages from users whose ID does not match ADMIN_ID
     """
     await message.answer("Access Restricted\nThis bot is in private test mode. Please contact the administrator.")
-    logging.warning(f"Unauthorized access attempt by {message.from_user.full_name} (ID: {message.from_user.id})")
+    logging.warning("Unauthorized access attempt by %s (ID: %s)", message.from_user.full_name, message.from_user.id)
     return 
 
 @dp.callback_query(F.from_user.id != int(getenv("ADMIN_ID") or 0))
@@ -179,7 +173,7 @@ async def process_notion_key(message: Message, state: FSMContext):
     try:
         await message.delete()
     except Exception as e:
-        print(f"Failed to delete message: {e}")
+        logging.warning("Failed to delete message: %s", e)
         await message.answer("Failed to delete your message. Please delete it manually.")
 
     if not raw_key:
@@ -223,7 +217,7 @@ async def process_notion_database(message: Message, state: FSMContext):
     raw_text = message.text or ""
     tg_id = message.from_user.id
 
-    database_id = _extract_notion_database_id(raw_text)
+    database_id = extract_notion_database_id(raw_text)
     if not database_id:
         await message.answer(
             "Failed to find ID. Send the link to the Notion database or the ID itself."
@@ -285,10 +279,14 @@ async def voice_handler(message: Message) -> None:
     file_info = await message.bot.get_file(voice.file_id)
     file_path = file_info.file_path
     
-    local_filename = Path(f"voice_{voice.file_id}.ogg")
     stop_whisper_event = asyncio.Event()
     progress_task = asyncio.create_task(progress_bar_animation(message, stop_whisper_event))
     status_msg = None
+    
+    # Use a temporary file to avoid leaving orphans in CWD
+    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+        local_filename = Path(tmp.name)
+        
     try:
         await message.bot.download_file(file_path, local_filename)
 
@@ -299,9 +297,10 @@ async def voice_handler(message: Message) -> None:
             model=_get_whisper_model(),
         )
 
-        voice_transcription: WhisperResult = await asyncio.to_thread(
-            transcribe_audio, request_obj
-        )
+        async with whisper_semaphore:
+            voice_transcription: WhisperResult = await asyncio.to_thread(
+                transcribe_audio, request_obj
+            )
 
         try:
             llm_service = _get_llm_service()
@@ -335,7 +334,7 @@ async def voice_handler(message: Message) -> None:
             message.from_user.id
         )
     except Exception as e:
-        logging.error(f"Error processing voice message: {e}")
+        logging.error("Error processing voice message: %s", e)
         await message.answer("An error occurred while processing the voice message.")
     finally:
         stop_whisper_event.set()
@@ -349,17 +348,16 @@ async def voice_handler(message: Message) -> None:
  
 @dp.message(Command("help"))
 async def handle_help(message: Message):
-    pdf_path = "guide.pdf" 
+    pdf_path = Path(__file__).parent.parent / "guide.pdf" 
     
     try:
         pdf_file = FSInputFile(pdf_path)
-        await message.answer(f"DEBUG: User {message.from_user.full_name} has ID: {message.from_user.id}")
         await message.answer_document(
             document=pdf_file,
             caption="NotionVoiceMemo Setup Guide (PDF)\n\nFollow these steps to connect your database."
         )
     except Exception as e:
-        logging.error(f"Failed to send PDF: {e}")
+        logging.error("Failed to send PDF: %s", e)
         await message.answer("Sorry, I couldn't find the guide file.")
         
 async def register_auto_save(
@@ -443,19 +441,19 @@ async def reject_handler(callback: CallbackQuery):
         pending_confirmations.pop(note_id, None)
         
 @dp.message()
-async def echo_handler(message: Message) -> None:
-    """
-    Handler will forward receive a message back to the sender
-
-    By default, message handler will handle all message types (like a text, photo, sticker etc.)
-    """
-    try:
-        await message.send_copy(chat_id=message.chat.id)
-    except TypeError:
-        await message.answer("Nice try!")
+async def fallback_handler(message: Message) -> None:
+    """Handles all unrecognized message types."""
+    await message.answer(
+        "I only understand voice messages.\n"
+        "Send me a voice memo and I'll transcribe it and create a Notion note.\n"
+        "Send /help for setup instructions."
+    )
 
 
 async def main() -> None:
+    # Auto-create tables (if Alembic is not run manually)
+    Base.metadata.create_all(bind=engine)
+    
     if _should_preload_model():
         logging.info("Preloading Whisper model...")
         _get_whisper_model()

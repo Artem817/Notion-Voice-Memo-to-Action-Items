@@ -119,7 +119,7 @@ class NotionPublisher:
                 "type": "paragraph",
                 "paragraph": {
                     "rich_text": [
-                        # ВИПРАВЛЕНО: annotations тепер на одному рівні з text
+                        # annotations is a sibling of text, not nested inside it
                         {
                             "type": "text", 
                             "text": {"content": "Original Transcript: "}, 
@@ -142,7 +142,7 @@ class NotionPublisher:
     ) -> dict:
         properties: dict = {
             "Name": {"title": [{"text": {"content": title}}]},
-            "Priority": {"select": {"name": priority}} # Додано пріоритет
+            "Priority": {"select": {"name": priority}} # Priority field
         }
         normalized_date = _normalize_date(date_value)
         if normalized_date:
@@ -170,7 +170,7 @@ class NotionPublisher:
             existing = response.json().get("properties", {})
             to_add = {}
             
-            # Перевірка Priority (Select)
+            # Check Priority (Select)
             if "Priority" not in existing:
                 to_add["Priority"] = {
                     "select": {
@@ -198,7 +198,7 @@ class NotionPublisher:
         tasks: Sequence[str],
         transcript: str | None = None,
         date_value: str | None = None,
-        priority: str = "Normal" # Приймаємо пріоритет від LLM
+        priority: str = "Normal" # Accept priority from LLM
     ) -> dict:
         token, database_id = self._load_credentials(user_id)
         await self._ensure_properties_exist(token, database_id)

@@ -1,5 +1,4 @@
 from pydantic import BaseModel
-from typing import List
 from app.voice_processing import VoiceProcessingRequest
 
 class WhisperSegment(BaseModel):
@@ -8,7 +7,7 @@ class WhisperSegment(BaseModel):
     start: float
     end: float
     text: str
-    tokens: List[int]
+    tokens: list[int]
     temperature: float
     avg_logprob: float
     compression_ratio: float
@@ -16,23 +15,23 @@ class WhisperSegment(BaseModel):
 
 class WhisperResult(BaseModel):
     text: str
-    segments: List[WhisperSegment]
+    segments: list[WhisperSegment]
     language: str
 
-def transcribe_audio(voice_request_obg: VoiceProcessingRequest) -> WhisperResult:
+def transcribe_audio(voice_request: VoiceProcessingRequest) -> WhisperResult:
     """
-    Transcribes the audio file at the given path and returns the transcription text.
-    
+    Transcribes the audio file using the Whisper model attached to the request.
+
     Args:
-        file_path (Path): The path to the audio file to be transcribed. 
-        
+        voice_request: A validated request containing the file path and loaded Whisper model.
+
     Returns:
-        str: The transcription text.
+        WhisperResult: The transcription text, segments, and detected language.
     """
-    if voice_request_obg.model is None:
+    if voice_request.model is None:
         raise ValueError("Whisper model is not loaded.")
 
-    result = voice_request_obg.model.transcribe(str(voice_request_obg.file_path))
+    result = voice_request.model.transcribe(str(voice_request.file_path))
     return WhisperResult(
         text=result["text"],
         segments=[WhisperSegment(**segment) for segment in result.get("segments", [])],
