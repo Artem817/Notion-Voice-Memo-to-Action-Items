@@ -166,7 +166,7 @@ async def access_denied_callback(callback: CallbackQuery):
     await callback.answer("Access denied.", show_alert=True)
 
 
-@dp.message(Command("help"), state="*")
+@dp.message(Command("help"))
 async def handle_help(message: Message):
     pdf_path = Path(__file__).parent.parent / "guide.pdf" 
     
@@ -181,7 +181,7 @@ async def handle_help(message: Message):
         await message.answer("Sorry, I couldn't find the guide file.")
 
 
-@dp.message(CommandStart(), state="*")
+@dp.message(CommandStart())
 async def command_start_handler(message: Message, state: FSMContext) -> None:
     """
     This handler receives messages with `/start` command
