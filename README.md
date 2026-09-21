@@ -14,6 +14,12 @@ Voice Message → Whisper (local STT) → Gemini LLM (structuring) → Notion AP
 4. The user sees a preview and can confirm or cancel
 5. The structured note is published to their connected Notion database with to-do items
 
+## Demo
+
+| Voice Processing & Preview | Auto-save & Direct Notion Link | Structured Note in Notion |
+| :---: | :---: | :---: |
+| <img src="assets/telegram_confirmation.png" width="300" alt="Telegram Confirmation" /> | <img src="assets/telegram_saved.png" width="300" alt="Telegram Saved" /> | <img src="assets/notion_result.png" width="400" alt="Notion Note" /> |
+
 ## Features
 
 - **Local speech-to-text** — Whisper runs on CPU/CUDA, no audio leaves the server
@@ -74,7 +80,14 @@ Voice Message → Whisper (local STT) → Gemini LLM (structuring) → Notion AP
    docker compose up --build
    ```
 
-   On first startup, Whisper will download model weights (~1.5 GB for `medium`). They are cached in `./whisper_models` and persist across restarts.
+   > [!TIP]
+   > **First Startup & Model Download Time:**
+   > On the first startup, Whisper automatically downloads the weights for your configured `WHISPER_MODEL`:
+   > - **`tiny` (~75 MB)**: Downloads in seconds; ideal for quick testing or low-memory servers.
+   > - **`base` (~140 MB)**: Very fast and lightweight.
+   > - **`medium` (~1.5 GB)** (default): High transcription accuracy, but the initial download can take 5–20 minutes depending on network bandwidth.
+   >
+   > The weights are saved in the `./whisper_models` volume and persist across restarts, so they are only downloaded once.
 
 4. **Connect Notion in Telegram**
 
