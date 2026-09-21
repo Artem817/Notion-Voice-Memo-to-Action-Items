@@ -1,11 +1,13 @@
 import pytest
+from cryptography.fernet import Fernet
 from app.services.notion_publisher import NotionPublisher
 
 class TestNotionPublisher:
     @pytest.fixture
     def publisher(self):
         # Mock session_factory and master_key, we won't use them for payload building
-        return NotionPublisher(session_factory=lambda: None, master_key="mock_key")
+        mock_key = Fernet.generate_key().decode()
+        return NotionPublisher(session_factory=lambda: None, master_key=mock_key)
 
     def test_build_page_payload(self, publisher):
         payload = publisher._build_page_payload(
