@@ -212,6 +212,22 @@ async def command_start_handler(message: Message, state: FSMContext) -> None:
         await state.set_state(NotionSetup.waiting_for_key)
 
 
+@dp.message(Command("reset"))
+async def command_reset_handler(message: Message, state: FSMContext) -> None:
+    """
+    This handler receives messages with `/reset` command to clear Notion settings
+    """
+    tg_id = message.from_user.id
+    with get_db() as session:
+        user_cred = session.query(NotionCredential).filter_by(user_id=tg_id).first()
+        if user_cred:
+            session.delete(user_cred)
+            session.commit()
+            
+    await state.clear()
+    await message.answer("♻️ Your Notion settings have been completely reset.\n\nSend /start to connect a new Notion workspace.")
+
+
 @dp.message(NotionSetup.waiting_for_key)
 async def process_notion_key(message: Message, state: FSMContext):
     raw_key = message.text
@@ -465,8 +481,10 @@ async def fallback_handler(message: Message) -> None:
     """Handles all unrecognized message types."""
     await message.answer(
         "I only understand voice messages.\n"
-        "Send me a voice memo and I'll transcribe it and create a Notion note.\n"
-        "Send /help for setup instructions."
+        "Send me a voice memo and I'll transcribe it and create a Notion note.\n\n"
+        "Commands:\n"
+        "/help — Setup instructions\n"
+        "/reset — Disconnect your Notion workspace"
     )
 
 
