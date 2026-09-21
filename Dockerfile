@@ -14,10 +14,9 @@ ENV PYTHONUNBUFFERED=1
 ENV WHISPER_CACHE_DIR=/app/whisper_models
 ENV PYTHONPATH=/app 
 
-COPY requirements.txt .
-# On ARM architectures (like Mac M1/M2), the default PyPI index provides 
-# pre-compiled CPU wheels automatically. The extra index caused fallback to source compilation.
-RUN pip install --no-cache-dir -r requirements.txt
+# Increase pip timeout and retries to ensure large dependencies like PyTorch
+# download reliably even on slower networks without failing.
+RUN pip install --default-timeout=1000 --retries 10 -r requirements.txt
 
 COPY . .
 
