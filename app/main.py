@@ -164,7 +164,53 @@ async def access_denied_handler(message: Message):
 @dp.callback_query(F.from_user.id != int(getenv("ADMIN_ID") or 0))
 async def access_denied_callback(callback: CallbackQuery):
     await callback.answer("Access denied.", show_alert=True)
+
+
+@dp.message(Command("help"), state="*")
+async def handle_help(message: Message):
+    pdf_path = Path(__file__).parent.parent / "guide.pdf" 
     
+    try:
+        pdf_file = FSInputFile(pdf_path)
+        await message.answer_document(
+            document=pdf_file,
+            caption="NotionVoiceMemo Setup Guide (PDF)\n\nFollow these steps to connect your database."
+        )
+    except Exception as e:
+        logging.error("Failed to send PDF: %s", e)
+        await message.answer("Sorry, I couldn't find the guide file.")
+
+
+@dp.message(CommandStart(), state="*")
+async def command_start_handler(message: Message, state: FSMContext) -> None:
+    """
+    This handler receives messages with `/start` command
+    """
+    tg_id = message.from_user.id
+    with get_db() as session:
+        user_cred = session.query(NotionCredential).filter_by(user_id=tg_id).first()
+
+        if user_cred and user_cred.database_id:
+            await message.answer(
+                f"Hello! Your Notion is connected (Key ID: {user_cred.id}). You can send voice messages."
+            )
+            return
+
+        if user_cred and not user_cred.database_id:
+            await message.answer(
+                "Great! Now send the link to the Notion database or its ID."
+            )
+            await state.set_state(NotionSetup.waiting_for_database)
+            return
+
+        await message.answer(
+            "Welcome to NotionVoiceMemo! Let's connect your Notion first. For instructions, send /help")
+        
+        await message.answer(
+            "Send your Notion API Key (secret_ or ntn_...)."
+        )
+        await state.set_state(NotionSetup.waiting_for_key)
+
 
 @dp.message(NotionSetup.waiting_for_key)
 async def process_notion_key(message: Message, state: FSMContext):
@@ -240,35 +286,7 @@ async def process_notion_database(message: Message, state: FSMContext):
     )
     await state.clear()
         
-@dp.message(CommandStart())
-async def command_start_handler(message: Message, state: FSMContext) -> None:
-    """
-    This handler receives messages with `/start` command
-    """
-    tg_id = message.from_user.id
-    with get_db() as session:
-        user_cred = session.query(NotionCredential).filter_by(user_id=tg_id).first()
 
-        if user_cred and user_cred.database_id:
-            await message.answer(
-                f"Hello! Your Notion is connected (Key ID: {user_cred.id}). You can send voice messages."
-            )
-            return
-
-        if user_cred and not user_cred.database_id:
-            await message.answer(
-                "Great! Now send the link to the Notion database or its ID."
-            )
-            await state.set_state(NotionSetup.waiting_for_database)
-            return
-
-        await message.answer(
-            "Welcome to NotionVoiceMemo! Let's connect your Notion first. For instructions, send /help")
-        
-        await message.answer(
-            "Send your Notion API Key (secret_ or ntn_...)."
-        )
-        await state.set_state(NotionSetup.waiting_for_key)
 
 @dp.message(F.content_type == "voice")
 async def voice_handler(message: Message) -> None:
@@ -346,20 +364,7 @@ async def voice_handler(message: Message) -> None:
         with suppress(FileNotFoundError):
             local_filename.unlink()
  
-@dp.message(Command("help"))
-async def handle_help(message: Message):
-    pdf_path = Path(__file__).parent.parent / "guide.pdf" 
-    
-    try:
-        pdf_file = FSInputFile(pdf_path)
-        await message.answer_document(
-            document=pdf_file,
-            caption="NotionVoiceMemo Setup Guide (PDF)\n\nFollow these steps to connect your database."
-        )
-    except Exception as e:
-        logging.error("Failed to send PDF: %s", e)
-        await message.answer("Sorry, I couldn't find the guide file.")
-        
+
 async def register_auto_save(
     message_obj: Message,
     transcript: str,
