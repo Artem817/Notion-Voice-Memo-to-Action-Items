@@ -64,7 +64,7 @@ async def save_to_notion(
         logging.error("MASTER_KEY is not set")
         return False, "Server not configured. Please try again later."
     try:
-        await publisher.publish_from_user_id(
+        res = await publisher.publish_from_user_id(
             user_id=user_id,
             title=structured_data.llm_data.title,
             tasks=structured_data.llm_data.tasks,
@@ -72,6 +72,8 @@ async def save_to_notion(
             date_value=structured_data.llm_data.task_date_from_user,
             priority=structured_data.llm_data.priority,
         )
+        page_url = res.get("url") or (f"https://notion.so/{res['id'].replace('-', '')}" if "id" in res else "")
+        return True, page_url
     except NotionCredentialsMissing:
         return False, "Notion is not connected. Send /start and connect the database."
     except NotionPublishError as exc:
@@ -80,8 +82,6 @@ async def save_to_notion(
     except Exception as exc:  # pragma: no cover - unexpected error
         logging.exception("Unexpected Notion error: %s", exc)
         return False, "Failed to save note to Notion."
-
-    return True, ""
 
 def _resolve_models_dir() -> Path:
     env_dir = getenv("WHISPER_CACHE_DIR") or getenv("WHISPER_MODELS_DIR")
@@ -393,9 +393,15 @@ async def _auto_save_task(note_id: int, message_obj: Message):
         )
 
         if success:
+            page_url = error_message
+            kb = None
+            if page_url:
+                kb_builder = InlineKeyboardBuilder()
+                kb_builder.button(text="🔗 Open in Notion", url=page_url)
+                kb = kb_builder.as_markup()
             await message_obj.edit_text(
                 "✅ Automatically saved to Notion.",
-                reply_markup=None,
+                reply_markup=kb,
             )
         else:
             await message_obj.edit_text(
@@ -418,7 +424,16 @@ async def accept_handler(callback: CallbackQuery):
             user_id=data["user_id"],
         )
         if success:
-            await callback.message.edit_text("✅ Saved to Notion.")
+            page_url = error_message
+            kb = None
+            if page_url:
+                kb_builder = InlineKeyboardBuilder()
+                kb_builder.button(text="🔗 Open in Notion", url=page_url)
+                kb = kb_builder.as_markup()
+            await callback.message.edit_text(
+                "✅ Saved to Notion.",
+                reply_markup=kb,
+            )
             await callback.answer("Saved!")
         else:
             await callback.message.edit_text(f"❌ Failed to save. {error_message}")
