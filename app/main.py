@@ -455,9 +455,38 @@ async def main() -> None:
     Base.metadata.create_all(bind=engine)
     
     if _should_preload_model():
-        logging.info("Preloading Whisper model...")
-        _get_whisper_model()
-        logging.info("Whisper model loaded.")
+        model_name = (getenv("WHISPER_MODEL") or "medium").strip()
+        models_dir = _resolve_models_dir()
+        model_path = models_dir / f"{model_name}.pt"
+        
+        if not model_path.exists():
+            logging.info(
+                "\n=================================================================\n"
+                f" Whisper model '{model_name}' not found locally.\n"
+                " DOWNLOADING MODEL (this is a one-time process).\n"
+                " Depending on your internet speed, this may take 5 to 30 minutes.\n"
+                " Please DO NOT STOP the container while it's downloading.\n"
+                "=================================================================\n"
+            )
+        else:
+            logging.info(f"Loading cached Whisper model from {model_path}...")
+            
+        try:
+            _get_whisper_model()
+            logging.info("Whisper model loaded successfully!")
+        except Exception as e:
+            if "checksum" in str(e).lower():
+                logging.error(
+                    "\n=================================================================\n"
+                    " ERROR: The downloaded model file is corrupted (checksum mismatch).\n"
+                    " This usually happens if a previous download was interrupted.\n\n"
+                    f" FIX: Please delete the file '{model_path}' manually\n"
+                    " from your 'whisper_models' folder and restart the bot.\n"
+                    "=================================================================\n"
+                )
+                sys.exit(1)
+            raise e
+
     bot = Bot(token=_get_bot_token(), default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     await dp.start_polling(bot)
 
