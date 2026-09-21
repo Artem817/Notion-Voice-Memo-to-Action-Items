@@ -98,6 +98,14 @@ If you have an NVIDIA GPU on a Linux host and want to use CUDA for faster transc
 
    Send `/start` to the bot and follow the prompts to enter your Notion API key and database ID.
 
+### 🤖 Bot Commands
+
+| Command | Description |
+|---|---|
+| `/start` | Start the bot and initiate Notion workspace connection setup |
+| `/help` | Send the setup guide (PDF) with step-by-step connection instructions |
+| `/reset` | Disconnect the current Notion workspace and reset all stored credentials |
+
 ## Running without Docker
 
 ```bash
