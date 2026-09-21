@@ -1,7 +1,6 @@
 services:
   db:
     image: postgres:15-alpine
-    container_name: notion_postgres
     restart: always
     env_file: .env  
     ports:
@@ -16,7 +15,6 @@ services:
 
   bot:
     build: .
-    container_name: notionvoicememo-bot-1
     restart: unless-stopped
     env_file: .env
     environment:
